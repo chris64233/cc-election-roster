@@ -6,5 +6,6 @@ public record DistrictSummaryResponse(
         long issuedTotal,
         long consumed,
         long countedBallots,
-        long pendingProvisionals) {
+        long pendingProvisionals,
+        long pendingCures) {
 }

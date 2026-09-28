@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 
@@ -42,6 +43,10 @@ public class ProvisionalRecord {
     private String decisionReason;
 
     private Instant decidedAt;
+
+    /** 乐观锁：临时票裁定与补正确认/其他渠道登记并发时只允许一个事务提交。 */
+    @Version
+    private long version;
 
     protected ProvisionalRecord() {
     }

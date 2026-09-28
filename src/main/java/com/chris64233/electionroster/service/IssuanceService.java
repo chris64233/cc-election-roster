@@ -80,6 +80,10 @@ public class IssuanceService {
                 && !request.getExpectedDistrictCode().equals(voter.getDistrict().getCode())) {
             throw new ConflictException("投票点核验选区与名册不一致: " + request.getExpectedDistrictCode());
         }
+        if (request.isIdentityIncomplete() && type != IssuanceType.MAIL) {
+            // 材料不全暂存/补正只用于邮寄票；临时票走资格争议的临时票流程。
+            throw new ConflictException("身份材料不全补正仅适用于邮寄票");
+        }
 
         Issuance issuance = new Issuance(election, voter, voter.getDistrict(),
                 voter.getDistrict().getBallotStyle(), type, request.getEventNo(),
@@ -91,14 +95,20 @@ public class IssuanceService {
             throw new ConflictException("该选民在本次选举中已签发选票: " + request.getVoterRef());
         }
 
+        boolean curePending = false;
         if (type == IssuanceType.PROVISIONAL) {
             String notes = request.getIdentityNotes() != null ? request.getIdentityNotes() : "";
             provisionalRecordRepository.save(new ProvisionalRecord(issuance, notes));
+        } else if (type == IssuanceType.MAIL && request.isIdentityIncomplete()) {
+            // 邮寄票身份材料不全：选票暂不计入，进入补正流程；不额外签发任何票。
+            issuance.markCurePending();
+            curePending = true;
         }
 
         auditService.append("ISSUE", issuance.getEventNo(),
                 "type=" + type + ";district=" + voter.getDistrict().getCode()
-                        + ";pollingPlace=" + request.getPollingPlace());
+                        + ";pollingPlace=" + request.getPollingPlace()
+                        + ";curePending=" + curePending);
         return toResponse(issuance);
     }
 

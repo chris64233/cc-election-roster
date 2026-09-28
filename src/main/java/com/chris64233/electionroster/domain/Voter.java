@@ -71,4 +71,9 @@ public class Voter {
     public void setStatus(VoterStatus status) {
         this.status = status;
     }
+
+    /** 名册修正选民所属选区（如补正确认前重新核验发现选区变化）。 */
+    public void setDistrict(District district) {
+        this.district = district;
+    }
 }

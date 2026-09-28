@@ -29,6 +29,12 @@ public class IssueRequest {
     /** 仅临时签发使用：身份核验信息，与票面内容分离保存。 */
     private String identityNotes;
 
+    /**
+     * 仅邮寄票使用：身份材料不全时为 true，邮寄票登记后选票暂不计入，
+     * 进入补正流程；补正只恢复原选票，不重新签发。
+     */
+    private boolean identityIncomplete = false;
+
     public Long getElectionId() {
         return electionId;
     }
@@ -83,5 +89,13 @@ public class IssueRequest {
 
     public void setIdentityNotes(String identityNotes) {
         this.identityNotes = identityNotes;
+    }
+
+    public boolean isIdentityIncomplete() {
+        return identityIncomplete;
+    }
+
+    public void setIdentityIncomplete(boolean identityIncomplete) {
+        this.identityIncomplete = identityIncomplete;
     }
 }

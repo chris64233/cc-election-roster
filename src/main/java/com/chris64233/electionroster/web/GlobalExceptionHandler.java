@@ -1,6 +1,7 @@
 package com.chris64233.electionroster.web;
 
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -21,6 +22,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({ConflictException.class, IllegalStateException.class})
     public ResponseEntity<Map<String, Object>> handleConflict(RuntimeException ex) {
         return error(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    /** 跨渠道并发的最终兜底：有效结果唯一约束冲突，后来者失败回滚。 */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleIntegrity(DataIntegrityViolationException ex) {
+        return error(HttpStatus.CONFLICT, "并发冲突：该选民的有效投票结果已被另一渠道登记");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

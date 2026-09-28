@@ -50,9 +50,13 @@ class ElectionApiTest {
     @Autowired
     private ProvisionalRecordRepository provisionalRecordRepository;
     @Autowired
+    private com.chris64233.electionroster.repo.CureRecordRepository cureRecordRepository;
+    @Autowired
     private BallotContentRepository ballotContentRepository;
     @Autowired
     private SubmissionRecordRepository submissionRecordRepository;
+    @Autowired
+    private com.chris64233.electionroster.repo.EffectiveVoteRepository effectiveVoteRepository;
     @Autowired
     private AuditEventRepository auditEventRepository;
 
@@ -62,7 +66,9 @@ class ElectionApiTest {
     @BeforeEach
     void setUp() {
         submissionRecordRepository.deleteAllInBatch();
+        cureRecordRepository.deleteAllInBatch();
         provisionalRecordRepository.deleteAllInBatch();
+        effectiveVoteRepository.deleteAllInBatch();
         ballotContentRepository.deleteAllInBatch();
         issuanceRepository.deleteAllInBatch();
         auditEventRepository.deleteAllInBatch();

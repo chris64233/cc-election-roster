@@ -7,6 +7,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import java.time.Instant;
+
 @Entity
 @Table(name = "elections")
 public class Election {
@@ -17,6 +19,9 @@ public class Election {
 
     @Column(nullable = false)
     private String name;
+
+    /** 补正材料提交/确认截止时间；为 null 表示本次选举未设置补正期限。 */
+    private Instant cureDeadline;
 
     protected Election() {
     }
@@ -31,5 +36,13 @@ public class Election {
 
     public String getName() {
         return name;
+    }
+
+    public Instant getCureDeadline() {
+        return cureDeadline;
+    }
+
+    public void setCureDeadline(Instant cureDeadline) {
+        this.cureDeadline = cureDeadline;
     }
 }
