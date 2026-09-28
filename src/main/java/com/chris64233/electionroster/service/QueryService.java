@@ -4,11 +4,13 @@ import com.chris64233.electionroster.api.DistrictSummaryResponse;
 import com.chris64233.electionroster.api.VoterStatusResponse;
 import com.chris64233.electionroster.domain.Adjudication;
 import com.chris64233.electionroster.domain.AuditEvent;
+import com.chris64233.electionroster.domain.CureStatus;
 import com.chris64233.electionroster.domain.District;
 import com.chris64233.electionroster.domain.IssuanceStatus;
 import com.chris64233.electionroster.domain.Voter;
 import com.chris64233.electionroster.repo.AuditEventRepository;
 import com.chris64233.electionroster.repo.BallotContentRepository;
+import com.chris64233.electionroster.repo.CureRecordRepository;
 import com.chris64233.electionroster.repo.DistrictRepository;
 import com.chris64233.electionroster.repo.IssuanceRepository;
 import com.chris64233.electionroster.repo.ProvisionalRecordRepository;
@@ -19,13 +21,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-/** 只读查询：选民签发状态、临时票裁定、选区汇总、审计链。均不返回票面选择内容。 */
+/**
+ * 只读查询：选民签发状态、临时票裁定、补正状态、选区汇总、审计链。
+ * 均不返回票面选择内容，也不返回补正材料明细——材料记录不得用于推断或暴露投票内容。
+ */
 @Service
 public class QueryService {
 
     private final VoterRepository voterRepository;
     private final IssuanceRepository issuanceRepository;
     private final ProvisionalRecordRepository provisionalRecordRepository;
+    private final CureRecordRepository cureRecordRepository;
     private final DistrictRepository districtRepository;
     private final BallotContentRepository ballotContentRepository;
     private final AuditEventRepository auditEventRepository;
@@ -33,12 +39,14 @@ public class QueryService {
     public QueryService(VoterRepository voterRepository,
                         IssuanceRepository issuanceRepository,
                         ProvisionalRecordRepository provisionalRecordRepository,
+                        CureRecordRepository cureRecordRepository,
                         DistrictRepository districtRepository,
                         BallotContentRepository ballotContentRepository,
                         AuditEventRepository auditEventRepository) {
         this.voterRepository = voterRepository;
         this.issuanceRepository = issuanceRepository;
         this.provisionalRecordRepository = provisionalRecordRepository;
+        this.cureRecordRepository = cureRecordRepository;
         this.districtRepository = districtRepository;
         this.ballotContentRepository = ballotContentRepository;
         this.auditEventRepository = auditEventRepository;
@@ -51,11 +59,14 @@ public class QueryService {
         var issuance = issuanceRepository.findByElectionIdAndVoterId(electionId, voter.getId());
         if (issuance.isEmpty()) {
             return new VoterStatusResponse(voterRef, voter.getStatus().name(), false,
-                    null, null, voter.getDistrict().getCode(), null, null, null);
+                    null, null, voter.getDistrict().getCode(), null, null, null, null);
         }
         var i = issuance.get();
         String adjudication = provisionalRecordRepository.findByIssuanceId(i.getId())
                 .map(p -> p.getAdjudication().name()).orElse(null);
+        // 只暴露补正状态这一事实，不暴露材料内容/缺件说明。
+        String cureStatus = cureRecordRepository.findByIssuanceId(i.getId())
+                .map(c -> c.getStatus().name()).orElse(null);
         return new VoterStatusResponse(
                 voterRef,
                 voter.getStatus().name(),
@@ -65,7 +76,8 @@ public class QueryService {
                 i.getDistrict().getCode(),
                 i.getPollingPlace(),
                 i.getCreatedAt(),
-                adjudication);
+                adjudication,
+                cureStatus);
     }
 
     @Transactional(readOnly = true)
@@ -76,10 +88,14 @@ public class QueryService {
         long counted = ballotContentRepository.countByDistrictIdAndCountedTrue(districtId);
         long pending = provisionalRecordRepository
                 .countByIssuance_District_IdAndAdjudication(districtId, Adjudication.PENDING);
+        long pendingCures = cureRecordRepository
+                .countByIssuance_District_IdAndStatus(districtId, CureStatus.PENDING);
+        long held = ballotContentRepository.countByDistrictIdAndHeldTrue(districtId);
         long issuedTotal = issuanceRepository.countByDistrictIdAndStatus(districtId, IssuanceStatus.ISSUED)
                 + consumed
                 + issuanceRepository.countByDistrictIdAndStatus(districtId, IssuanceStatus.VOIDED);
-        return new DistrictSummaryResponse(district.getCode(), issuedTotal, consumed, counted, pending);
+        return new DistrictSummaryResponse(district.getCode(), issuedTotal, consumed, counted,
+                pending, pendingCures, held);
     }
 
     @Transactional(readOnly = true)

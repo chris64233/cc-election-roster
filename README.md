@@ -1,6 +1,6 @@
 # cc-election-roster
 
-选举、选区与选民名册管理服务：选民名册核验、选票签发（正式/临时/邮寄）、投票提交消费、临时票裁定与选区汇总。
+选举、选区与选民名册管理服务：选民名册核验、选票签发（正式/临时/邮寄）、投票提交消费、临时票裁定、身份材料补正（恢复原票）、跨渠道投票裁决与选区汇总。
 
 当前包含可启动的服务入口、持久化依赖、应用上下文测试以及完整的选举流程自动化测试。
 
@@ -54,29 +54,52 @@
 - 用同一凭证重放：**内容相同**（SHA-256 一致）返回原回执（`duplicate=true`）；**内容变化**返回 409 冲突。
 - 已计入（`counted=true`）的选票不可修改、不可撤回、不可作废。
 
-### 6. 查询与审计
+### 6. 身份材料补正（ballot cure）：只恢复原票、唯一有效结果
 
-- `选民签发状态`：返回名册状态、签发类型/状态、投票点与临时票裁定结果，不含票面选择。
-- `选区汇总`：签发总数、已消费凭证数、已计入选票数、待裁定临时票数。
-- `审计链`：追加式哈希链，`eventHash = SHA-256(prevHash|eventType|refId|detail)`，可独立重算校验；detail 只含类型、选区、`contentHash` 等摘要，**绝不记录票面选择内容**。
+邮寄票或临时票提交时若声明身份材料不全（`identityIncomplete=true`），选票进入**暂存**（`ballot_contents.held=true`，不计入），并针对**原签发**开启一条补正记录：
+
+- **提交新材料**：在补正截止时间（`elections.cure_deadline`）前可多次提交，形成递增版本，全部关联回原补正记录/原选票。**不会重新签发第二张票**（仍是原凭证、原 `issuance`，`(election,voter)` 唯一约束也不允许）。
+- **补正确认**才恢复计入；确认前在同一事务内重新检查：
+  - 是否已过补正截止时间；
+  - 选民名册状态（变为 `INELIGIBLE` 即拒绝）；
+  - 名册选区是否仍与原选票选区一致；
+  - 是否已通过其他渠道有效投票；并要求至少提交过一份新材料。
+- 确认通过：原暂存选票置 `counted=true`（恢复的是同一张票）；逾期/资格不符/选区不符/已在别处投票：原选票永久作废，补正进入对应终态（`CONFIRMED/REJECTED/EXPIRED/SUPERSEDED`），终态不可逆。
+
+**并发与原子性**：补正确认、其他渠道有效投票登记、截止裁定三类操作竞争同一选民行锁（`SELECT … FOR UPDATE`），跨渠道凭证消费与本地选票处置在同一事务原子完成；`external_vote_records` 对 `(election,voter)` 唯一约束兜底。因此同一选民在补正确认、其他渠道投票、截止裁定之间**最多保留一个有效结果**，已计入的本地选票会拒绝外部登记，反之暂存选票会被作废。
+
+**隔离**：补正材料（`cure_materials`/`cure_records`）只存身份侧说明与材料哈希，与匿名的 `ballot_contents` 之间无外键、无内容关联；状态/汇总/审计接口只暴露补正**状态**与哈希，不得由材料记录推断或暴露票面选择。
+
+### 7. 查询与审计
+
+- `选民签发状态`：返回名册状态、签发类型/状态、投票点、临时票裁定结果与补正状态（`cureStatus`），不含票面选择与补正材料明细。
+- `选区汇总`：签发总数、已消费凭证数、已计入选票数、待裁定临时票数、待补正数（`pendingCures`）、暂存选票数（`heldBallots`）。
+- `审计链`：追加式哈希链，`eventHash = SHA-256(prevHash|eventType|refId|detail)`，可独立重算校验；detail 只含类型、选区、`contentHash`、`materialHash` 等摘要，**绝不记录票面选择内容或材料正文**。
 
 ## HTTP 接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/issuances` | 签发正式/临时票或登记邮寄票（请求体含 electionId、voterRef、eventNo、type、pollingPlace，临时票加 identityNotes，可选 expectedDistrictCode） |
-| POST | `/api/submissions` | 凭 credentialToken 提交 choicesJson；重放同内容返回原回执，内容变化 409 |
+| POST | `/api/submissions` | 凭 credentialToken 提交 choicesJson；重放同内容返回原回执，内容变化 409。邮寄/临时票加 `identityIncomplete`/`missingMaterials` 则选票暂存待补正 |
 | POST | `/api/provisionals/{issuanceId}/adjudication` | 临时票裁定（accepted + reason） |
-| GET | `/api/elections/{electionId}/voters/{voterRef}/status` | 选民签发状态 |
-| GET | `/api/districts/{districtId}/summary` | 选区汇总 |
-| GET | `/api/audit` | 哈希链审计事件（无票面内容） |
-| POST | `/api/admin/voters` | 演示/测试用：登记选举、选区、样式与选民（按 code 幂等复用） |
+| POST | `/api/issuances/{issuanceId}/cure/materials` | 截止前提交补正新材料（materialNotes，可选 materialContent，仅存哈希）；返回递增版本 |
+| POST | `/api/issuances/{issuanceId}/cure/confirm` | 补正确认：复核截止/资格/选区/其他渠道投票后恢复原选票；失败 409 |
+| POST | `/api/elections/{electionId}/external-votes` | 登记其他渠道有效投票（voterRef、channel、externalRef）；原子处置本地待决选票，同凭证重放幂等 |
+| POST | `/api/cures/expire` | 截止裁定：作废所有逾期未补正的暂存选票 |
+| GET | `/api/elections/{electionId}/voters/{voterRef}/status` | 选民签发状态（含 adjudication、cureStatus） |
+| GET | `/api/districts/{districtId}/summary` | 选区汇总（含 pendingCures、heldBallots） |
+| GET | `/api/audit` | 哈希链审计事件（无票面内容、无材料正文） |
+| POST | `/api/admin/voters` | 演示/测试用：登记选举、选区、样式与选民（按 code 幂等复用，可选 cureDeadline 设置补正截止时间） |
 
 ## 数据模型
 
 - `elections` / `ballot_styles` / `districts` / `voters`：选举基础数据与名册。
 - `issuances`：签发凭证；唯一约束 `(election,voter)`、`(election,event_no)`、`credential_token`。
 - `provisional_records`：临时票身份侧信息与裁定（PENDING/ACCEPTED/REJECTED）。
-- `ballot_contents`：匿名票面选择，仅以随机 ballotId 标识，`counted`/`voided` 标记去向。
+- `ballot_contents`：匿名票面选择，仅以随机 ballotId 标识，`counted`/`voided`/`held` 标记去向。
 - `submission_records`：凭证消费记录（凭证唯一），保存 contentHash 与回执号。
+- `cure_records`：补正记录（身份侧，按 issuance 唯一），状态 PENDING/CONFIRMED/REJECTED/SUPERSEDED/EXPIRED，含截止时间快照。
+- `cure_materials`：补正材料版本（只存说明与 materialHash），关联回原补正记录。
+- `external_vote_records`：其他渠道有效投票，`(election,voter)` 唯一，跨渠道凭证消费据此裁决。
 - `audit_events`：哈希链审计事件，只存摘要。

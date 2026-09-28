@@ -71,4 +71,8 @@ public class Voter {
     public void setStatus(VoterStatus status) {
         this.status = status;
     }
+
+    public void setDistrict(District district) {
+        this.district = district;
+    }
 }

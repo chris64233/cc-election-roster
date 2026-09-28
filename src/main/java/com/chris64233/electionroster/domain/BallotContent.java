@@ -44,6 +44,13 @@ public class BallotContent {
     @Column(nullable = false)
     private boolean voided;
 
+    /**
+     * 因身份材料不全被暂存（hold）：邮寄票/临时票已提交但不计入，等待补正确认。
+     * 与身份侧 CureRecord 一一对应，但本表仍不含任何身份引用。
+     */
+    @Column(nullable = false)
+    private boolean held;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -52,6 +59,11 @@ public class BallotContent {
 
     public BallotContent(String ballotId, Election election, District district,
                          String choicesJson, String contentHash, boolean counted) {
+        this(ballotId, election, district, choicesJson, contentHash, counted, false);
+    }
+
+    public BallotContent(String ballotId, Election election, District district,
+                         String choicesJson, String contentHash, boolean counted, boolean held) {
         this.ballotId = ballotId;
         this.election = election;
         this.district = district;
@@ -59,23 +71,30 @@ public class BallotContent {
         this.contentHash = contentHash;
         this.counted = counted;
         this.voided = false;
+        this.held = held;
         this.createdAt = Instant.now();
     }
 
-    /** 临时票裁定通过时计入；已计入的选票不允许再变更。 */
+    /** 临时票裁定/补正通过时计入；已计入的选票不允许再变更。计入同时解除暂存。 */
     public void markCounted() {
         if (this.counted) {
             throw new IllegalStateException("选票已计入，不可重复计入");
         }
         this.counted = true;
+        this.held = false;
     }
 
-    /** 临时票裁定拒绝时永久作废；已计入的选票不得作废。 */
+    /** 临时票裁定拒绝/补正失败时永久作废；已计入的选票不得作废。 */
     public void markVoided() {
         if (this.counted) {
             throw new IllegalStateException("已计入的选票不得作废");
         }
+        this.held = false;
         this.voided = true;
+    }
+
+    public boolean isHeld() {
+        return held;
     }
 
     public String getBallotId() {

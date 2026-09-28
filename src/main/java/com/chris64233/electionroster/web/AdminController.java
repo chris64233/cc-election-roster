@@ -53,7 +53,17 @@ public class AdminController {
         Election election = electionRepository.findAll().stream()
                 .filter(e -> e.getName().equals(request.getElectionName()))
                 .findFirst()
-                .orElseGet(() -> electionRepository.save(new Election(request.getElectionName())));
+                .map(existing -> {
+                    // 允许通过登记接口设置/更新补正截止时间（演示/测试用）。
+                    if (request.getCureDeadline() != null
+                            && !request.getCureDeadline().equals(existing.getCureDeadline())) {
+                        existing.setCureDeadline(request.getCureDeadline());
+                        return electionRepository.save(existing);
+                    }
+                    return existing;
+                })
+                .orElseGet(() -> electionRepository.save(
+                        new Election(request.getElectionName(), request.getCureDeadline())));
 
         District district = districtRepository.findAll().stream()
                 .filter(d -> d.getElection().getId().equals(election.getId())

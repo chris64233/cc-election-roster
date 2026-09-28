@@ -7,5 +7,6 @@ public record SubmitResponse(
         String contentHash,
         boolean counted,
         boolean duplicate,
+        boolean held,
         Instant submittedAt) {
 }

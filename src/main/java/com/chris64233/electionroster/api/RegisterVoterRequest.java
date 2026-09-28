@@ -2,6 +2,8 @@ package com.chris64233.electionroster.api;
 
 import jakarta.validation.constraints.NotBlank;
 
+import java.time.Instant;
+
 public class RegisterVoterRequest {
 
     @NotBlank
@@ -18,6 +20,9 @@ public class RegisterVoterRequest {
 
     /** ELIGIBLE / DISPUTED / INELIGIBLE，默认 ELIGIBLE。 */
     private String voterStatus = "ELIGIBLE";
+
+    /** 可选：补正截止时间（ISO-8601），用于身份材料补正流程。 */
+    private Instant cureDeadline;
 
     public String getElectionName() {
         return electionName;
@@ -57,5 +62,13 @@ public class RegisterVoterRequest {
 
     public void setVoterStatus(String voterStatus) {
         this.voterStatus = voterStatus;
+    }
+
+    public Instant getCureDeadline() {
+        return cureDeadline;
+    }
+
+    public void setCureDeadline(Instant cureDeadline) {
+        this.cureDeadline = cureDeadline;
     }
 }

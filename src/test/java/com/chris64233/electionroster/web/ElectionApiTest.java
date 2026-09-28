@@ -8,8 +8,11 @@ import com.chris64233.electionroster.domain.VoterStatus;
 import com.chris64233.electionroster.repo.AuditEventRepository;
 import com.chris64233.electionroster.repo.BallotContentRepository;
 import com.chris64233.electionroster.repo.BallotStyleRepository;
+import com.chris64233.electionroster.repo.CureMaterialRepository;
+import com.chris64233.electionroster.repo.CureRecordRepository;
 import com.chris64233.electionroster.repo.DistrictRepository;
 import com.chris64233.electionroster.repo.ElectionRepository;
+import com.chris64233.electionroster.repo.ExternalVoteRecordRepository;
 import com.chris64233.electionroster.repo.IssuanceRepository;
 import com.chris64233.electionroster.repo.ProvisionalRecordRepository;
 import com.chris64233.electionroster.repo.SubmissionRecordRepository;
@@ -54,6 +57,12 @@ class ElectionApiTest {
     @Autowired
     private SubmissionRecordRepository submissionRecordRepository;
     @Autowired
+    private CureMaterialRepository cureMaterialRepository;
+    @Autowired
+    private CureRecordRepository cureRecordRepository;
+    @Autowired
+    private ExternalVoteRecordRepository externalVoteRecordRepository;
+    @Autowired
     private AuditEventRepository auditEventRepository;
 
     private Long electionId;
@@ -62,6 +71,9 @@ class ElectionApiTest {
     @BeforeEach
     void setUp() {
         submissionRecordRepository.deleteAllInBatch();
+        externalVoteRecordRepository.deleteAllInBatch();
+        cureMaterialRepository.deleteAllInBatch();
+        cureRecordRepository.deleteAllInBatch();
         provisionalRecordRepository.deleteAllInBatch();
         ballotContentRepository.deleteAllInBatch();
         issuanceRepository.deleteAllInBatch();
@@ -213,5 +225,107 @@ class ElectionApiTest {
                 .andExpect(jsonPath("$[0].eventType").value("ISSUE"))
                 .andReturn().getResponse().getContentAsString();
         org.assertj.core.api.Assertions.assertThat(audit).doesNotContain("SECRET");
+    }
+
+    private void setFutureCureDeadline() {
+        electionRepository.findById(electionId).ifPresent(e -> {
+            e.setCureDeadline(java.time.Instant.now().plus(java.time.Duration.ofDays(7)));
+            electionRepository.save(e);
+        });
+    }
+
+    @Test
+    void mailBallotHeldForCure_thenMaterialAndConfirm_restoresIt() throws Exception {
+        setFutureCureDeadline();
+        long issuanceId = objectMapper.readTree(
+                        issue("V-OK", "EVT-MAIL-CURE", "MAIL", null))
+                .get("issuanceId").asLong();
+        String token = issuanceRepository.findById(issuanceId).orElseThrow().getCredentialToken();
+
+        // 提交时声明身份材料不全 -> held=true、不计入
+        mockMvc.perform(post("/api/submissions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"credentialToken\":\"%s\",\"choicesJson\":\"{\\\"mayor\\\":\\\"ALICE_SECRET\\\"}\","
+                                .formatted(token)
+                                + "\"identityIncomplete\":true,\"missingMaterials\":\"缺证件\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.counted").value(false))
+                .andExpect(jsonPath("$.held").value(true));
+
+        mockMvc.perform(get("/api/districts/{id}/summary", districtId))
+                .andExpect(jsonPath("$.countedBallots").value(0))
+                .andExpect(jsonPath("$.heldBallots").value(1))
+                .andExpect(jsonPath("$.pendingCures").value(1));
+
+        // 截止前提交新材料：新版本，仍关联原选票
+        mockMvc.perform(post("/api/issuances/{id}/cure/materials", issuanceId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"materialNotes\":\"补交护照\",\"materialContent\":\"DOC-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.cureStatus").value("PENDING"));
+
+        // 确认恢复原选票计入
+        mockMvc.perform(post("/api/issuances/{id}/cure/confirm", issuanceId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"核验通过\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.restored").value(true))
+                .andExpect(jsonPath("$.cureStatus").value("CONFIRMED"));
+
+        mockMvc.perform(get("/api/districts/{id}/summary", districtId))
+                .andExpect(jsonPath("$.countedBallots").value(1))
+                .andExpect(jsonPath("$.heldBallots").value(0))
+                .andExpect(jsonPath("$.pendingCures").value(0));
+
+        // 选民状态暴露 cureStatus 但不暴露材料/票面；审计链不出现选择内容与材料正文
+        mockMvc.perform(get("/api/elections/{eid}/voters/V-OK/status", electionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cureStatus").value("CONFIRMED"));
+        String audit = mockMvc.perform(get("/api/audit")).andReturn().getResponse().getContentAsString();
+        org.assertj.core.api.Assertions.assertThat(audit).doesNotContain("ALICE_SECRET", "DOC-1");
+    }
+
+    @Test
+    void externalVote_supersedesHeldBallot_andConfirmFails_409() throws Exception {
+        setFutureCureDeadline();
+        long issuanceId = objectMapper.readTree(
+                        issue("V-OK", "EVT-MAIL-EXT", "MAIL", null))
+                .get("issuanceId").asLong();
+        String token = issuanceRepository.findById(issuanceId).orElseThrow().getCredentialToken();
+
+        mockMvc.perform(post("/api/submissions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"credentialToken\":\"%s\",\"choicesJson\":\"{}\","
+                                .formatted(token) + "\"identityIncomplete\":true}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/issuances/{id}/cure/materials", issuanceId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"materialNotes\":\"补交证件\"}"))
+                .andExpect(status().isOk());
+
+        // 其他渠道有效投票：本地暂存选票作废
+        mockMvc.perform(post("/api/elections/{eid}/external-votes", electionId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"voterRef\":\"V-OK\",\"channel\":\"OTHER_PLACE\",\"externalRef\":\"EXT-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outcome").value("LOCAL_BALLOT_VOIDED"));
+
+        // 再确认补正 -> 409，选票未计入
+        mockMvc.perform(post("/api/issuances/{id}/cure/confirm", issuanceId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/api/districts/{id}/summary", districtId))
+                .andExpect(jsonPath("$.countedBallots").value(0));
+
+        // 同一外部凭证重放幂等
+        mockMvc.perform(post("/api/elections/{eid}/external-votes", electionId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"voterRef\":\"V-OK\",\"channel\":\"OTHER_PLACE\",\"externalRef\":\"EXT-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outcome").value("DUPLICATE"));
     }
 }
